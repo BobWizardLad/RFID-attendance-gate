@@ -11,7 +11,7 @@ import time
 import numpy
 
 # Relevant MQTT topic and Client ID
-TOPIC = "uark/csce5013/robell/testFinalProj"
+TOPIC = "uark/csce5013/kaorman/attendance"
 CLIENT = 'MQTT_HANDLER'
 
 # Let's see a simple structure in this script to remember IDs

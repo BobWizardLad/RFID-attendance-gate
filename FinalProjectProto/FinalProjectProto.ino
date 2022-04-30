@@ -6,6 +6,7 @@
 #include <Adafruit_SSD1306.h>
 #include <SPI.h>
 #include <MFRC522.h>
+#include <algorithm>
 
 #define SS_PIN 11
 #define RST_PIN 6
@@ -17,12 +18,8 @@ MFRC522::MIFARE_Key key;
 // Init array that will store new NUID 
 byte nuidPICC[4];
 
-// Init array that will store new NUID 
-byte kyleUID[4];
-
-
 // Define MQTT topics
-#define TOPIC "attendance"
+#define TOPIC "uark/csce5013/kaorman/attendance"
 #define USERNAME "kaorman"
 #define SCREEN_WIDTH 128 // OLED display width,  in pixels
 #define SCREEN_HEIGHT 32 // OLED display height, in pixels
@@ -52,6 +49,8 @@ long lastMsg = 0;
 char msg[100];
 int attMessageArrived = 0;
 char attBuffer[100];
+char IDarray[18];
+char Namearray[18];
 
 // Create states of operation
 typedef enum mode{START, RECORD, SEND} MODE;
@@ -71,16 +70,12 @@ void greenOn(); // Green LED ON
 void greenOff(); // Green LED OFF
 void redOn(); // Red LED ON
 void redOff(); // Red LED OFF
-void printHex(); // Helper routine to dump a byte array as hex values to Serial
-void studentIdentifier();
+void stuID(); // Reads card block buffer to ID char array
+void stuName(); // Reads card block buffer to Name char array
+void sendTask(); // Posts student info to MQTT
 
 void setup() {
   // put your setup code here, to run once:
-  // Set kyle's UID card number in HEX
-  kyleUID[0] = 0x53;
-  kyleUID[1] = 0x1C;
-  kyleUID[2] = 0xF2;
-  kyleUID[3] = 0x31;
 
   // Serial connection set to 115200 BAUD
   Serial.begin(115200);
@@ -156,7 +151,6 @@ void reconnect() {
     if (client.connect(USERNAME)) {
       Serial.println("connected");
       // Once connected, subscribe to input channels
-      //client.subscribe(TOPIC);
       client.subscribe(TOPIC);
   } else {
       Serial.print("failed, rc =");
@@ -178,8 +172,7 @@ void loop() {
     // Recieving RFID attendance operation
     case RECORD:
       rfidTask();
-      //studentIdentifier();
-      lcdTask();
+      //lcdTask();
     break;
     // Sending data to MQTT
     case SEND:
@@ -187,6 +180,7 @@ void loop() {
         reconnect();
       }
       client.loop();
+      sendTask();
       lcdTask();
       curMode = RECORD;
     break;
@@ -252,6 +246,10 @@ Serial.print(F("ID: "));
     }
   }
   Serial.print(" ");
+  stuID(buffer1, sizeof(buffer1));
+  // for(int i = 0; i < strlen(IDarray); i++){
+  //   Serial.print(IDarray[i]);
+  // }
 
   //---------------------------------------- GET LAST NAME
 
@@ -280,11 +278,16 @@ Serial.print(F("ID: "));
   for (uint8_t i = 0; i < 16; i++) {
     Serial.write(buffer2[i] );
   }
+
+  stuName(buffer2, sizeof(buffer2));
+  
   delay(1000); //change value if you want to read cards faster
 
   mfrc522.PICC_HaltA();
   mfrc522.PCD_StopCrypto1();
   Serial.println();
+  Serial.println();
+  curMode = SEND;
 }
 
 void greenOn(){
@@ -303,40 +306,40 @@ void redOff(){
   digitalWrite(RED_LED, LOW);
 }
 
-void printHex(byte *buffer, byte bufferSize) {
+void stuID(byte *buffer, byte bufferSize) {
   for (byte i = 0; i < bufferSize; i++) {
-    Serial.print(buffer[i] < 0x10 ? " 0" : " ");
-    Serial.print(buffer[i], HEX);
-  }
+      if(buffer[i] != ' '){
+        IDarray[i]=char(buffer[i]);
+      }
+      else{
+        break;
+      }
+    }
 }
 
-// void stuID(byte *buffer, byte bufferSize) {
-//   bool isKyle = false;
-//   for (byte i = 0; i < bufferSize; i++) {
-//     if(buffer[i] != kyleUID[i]){
-//       isKyle = false;
-//     }
-//     else{
-//       isKyle = true;
-//     }
-//   }
-//   if(isKyle){
-//     studentID = '010919454';
-//     Serial.print("Student ID: " + studentID);
-//     Serial.println();
-//   }
-// }
+void stuName(byte *buffer, byte bufferSize) {
+  for (byte i = 0; i < bufferSize; i++) {
+      if(buffer[i] != ' '){
+        Namearray[i]=char(buffer[i]);
+      }
+      else{
+        break;
+      }
+    }
+}
 
-// void studentIdentifier() {
-//     char studentID;
-//     if(rfid.uid.uidByte[0] == kyleUID[0] || 
-//       rfid.uid.uidByte[1] == kyleUID[1] || 
-//       rfid.uid.uidByte[2] == kyleUID[2] || 
-//       rfid.uid.uidByte[3] == kyleUID[3] ){
-//         studentID = '010919454';
-
-//     }
-//     else {studentID = 'Not Found';}
-//     Serial.print("Student ID: " + studentID);
-//     Serial.println();
-// }
+void sendTask(){
+  //String s = String(IDarray);
+  char sendBuffer[100];
+  *std::remove(IDarray, IDarray+strlen(IDarray), '\n') = '\0';
+  *std::remove(Namearray, Namearray+strlen(Namearray), '\n') = '\0';
+  strcat(sendBuffer, "Student ID: ");
+  strcat(sendBuffer, IDarray);
+  strcat(sendBuffer, " Student Name: ");
+  strcat(sendBuffer, Namearray);
+  *std::remove(sendBuffer, sendBuffer+strlen(sendBuffer), '\n') = '\0';
+  Serial.print("Sending attendance record...");
+  Serial.println();
+  client.publish(TOPIC, sendBuffer);
+  memcpy(sendBuffer, NULL, strlen(sendBuffer));
+}

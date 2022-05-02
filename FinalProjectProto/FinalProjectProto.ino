@@ -8,7 +8,7 @@
 #include <MFRC522.h>
 #include <algorithm>
 
-#define SS_PIN 11
+#define SS_PIN 7
 #define RST_PIN 6
  
 MFRC522 mfrc522(SS_PIN, RST_PIN); // Instance of the class
@@ -24,10 +24,10 @@ byte nuidPICC[4];
 #define SCREEN_WIDTH 128 // OLED display width,  in pixels
 #define SCREEN_HEIGHT 32 // OLED display height, in pixels
 #define RED_LED 1
-#define GRN_LED 0
+#define GRN_LED 5
 
 // declare an SSD1306 display object connected to I2C
-Adafruit_SSD1306 oled(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
+Adafruit_SSD1306 oled(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, 4);
 
 // Set SSID and network password
 char ssid[] = SSID;
@@ -51,17 +51,18 @@ int attMessageArrived = 0;
 char attBuffer[100];
 char IDarray[18];
 char Namearray[18];
+char sendBuffer[100];
 
 // Create states of operation
-typedef enum mode{START, RECORD, SEND} MODE;
+typedef enum mode{START, RECORD, SEND, ERROR} MODE;
 // Create topic states
 typedef enum topic{noTopic, attTopic} TOPIC_SEL;
 
 // Initialize state to START
 MODE curMode = START;
 
-// Initialize topic to noTopic
-TOPIC_SEL curTopic = noTopic;
+// Initialize topic to attTopic
+TOPIC_SEL curTopic = attTopic;
 
 // Function prototypes
 void lcdTask(); // Handles lcd display features
@@ -73,10 +74,11 @@ void redOff(); // Red LED OFF
 void stuID(); // Reads card block buffer to ID char array
 void stuName(); // Reads card block buffer to Name char array
 void sendTask(); // Posts student info to MQTT
+void resetFunct();
 
 void setup() {
   // put your setup code here, to run once:
-
+  
   // Serial connection set to 115200 BAUD
   Serial.begin(115200);
 
@@ -88,6 +90,18 @@ void setup() {
   // Initial connection to mqtt server
   client.setServer(mqtt_server, 1883);
   client.setCallback(callback);
+
+  // initialize OLED display with address 0x3C for 128x32
+  if (!oled.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
+    Serial.println(F("SSD1306 allocation failed"));
+    while (true);
+  }
+  oled.setTextSize(4); // Draw 2X-scale text
+  oled.setTextColor(SSD1306_WHITE);
+  oled.setCursor(0, 0);
+  oled.clearDisplay();
+  oled.println("READY");
+  oled.display();
 
   // Start state in reset state
   curMode = START;
@@ -110,34 +124,26 @@ void setup_wifi() {
 
 // Callback handles mqtt monitoring
 void callback(char* topic, byte* payload, unsigned int length) {
-  // Serial Monitor output showing massage arrival and payload
-  Serial.print("Message arrived [");
-  Serial.print(topic);
-  Serial.print("] ");
-  for(int i=0; i<length;i++) {
-    Serial.print((char)payload[i]);
-  }
-  Serial.println();
-  
-  // Sets current topic based on what has been posted to mqtt
-  if(strncmp(topic, TOPIC, strlen(TOPIC) == 0)){
-    curTopic = attTopic;
-  }
-  else {
-    curTopic = noTopic;
-  }
-
   // Switch statement to handle what to do when a message is recieved in a current topic
   switch(curTopic) {
     case noTopic:
       Serial.println("Error: message is from an unknown topic.");
+      curMode = ERROR;
       return;
     break;
     case attTopic:
-      //Copy payload into angle buffer after clearing it
-      //memcpy(attBuffer,NULL,length+1);
-      //memcpy(attBuffer,payload,length);
-      attMessageArrived = 0;
+      if((char)payload[0] == 'S'){
+        //Copy payload into buffer after clearing it
+        memset(attBuffer,0,sizeof(attBuffer));
+        memcpy(attBuffer,payload,length);
+        attMessageArrived = 1;
+      }
+      if((char)payload[0] == 'A'){
+        attMessageArrived = 1;
+      }
+      else {
+        attMessageArrived = 0;
+      }
       return;
     break;
   }
@@ -150,9 +156,13 @@ void reconnect() {
     //Attempt to connect
     if (client.connect(USERNAME)) {
       Serial.println("connected");
+      redOff();
+      greenOff();
       // Once connected, subscribe to input channels
       client.subscribe(TOPIC);
   } else {
+      redOn();
+      greenOff();
       Serial.print("failed, rc =");
       Serial.print(client.state());
       Serial.println(" try again in 5 seconds");
@@ -165,14 +175,21 @@ void reconnect() {
 void loop() {
   // put your main code here, to run repeatedly:
   switch(curMode) {
-    // Start state with lcd reading "BROKEN"
     case START:
+      redOff();
+      greenOff();
+      oled.clearDisplay();
+      // Move to RECORD state
       curMode = RECORD;
     break;
     // Recieving RFID attendance operation
     case RECORD:
+      if (!client.connected()) {
+        reconnect();
+      }
+      client.loop();
       rfidTask();
-      //lcdTask();
+      lcdTask();
     break;
     // Sending data to MQTT
     case SEND:
@@ -184,14 +201,39 @@ void loop() {
       lcdTask();
       curMode = RECORD;
     break;
+    // Error case
+    case ERROR:
+      redOn();
+      greenOff();
+      // Wait 10 secs and reset device
+      delay(5000);
+      NVIC_SystemReset(); // call reset
+    break;
   }
 }
 
 void lcdTask() {
+  if(attMessageArrived == 1){
+    attMessageArrived = 0;
+    oled.clearDisplay();
+    oled.setTextSize(1); // Draw 2X-scale text
+    oled.setTextColor(SSD1306_WHITE);
+    oled.setCursor(0, 0);
+    greenOn();
+    delay(1000);
+    greenOff();
 
+    for(int i = 0; i < 100; i++){
+      oled.print((char)attBuffer[i]);
+    }
+    oled.display();      // Show initial text
+    delay(100);
+  }
 }
 
 void rfidTask(){
+  memset(IDarray, 0, sizeof(IDarray));
+  memset(Namearray, 0, sizeof(Namearray));
   // Prepare key - all keys are set to FFFFFFFFFFFFh at chip delivery from the factory.
   MFRC522::MIFARE_Key key;
   for (byte i = 0; i < 6; i++) key.keyByte[i] = 0xFF;
@@ -218,6 +260,7 @@ void rfidTask(){
 Serial.print(F("ID: "));
 
   byte buffer1[18];
+  memset(buffer1, 0, sizeof(buffer1));
 
   block = 4;
   len = 18;
@@ -227,6 +270,8 @@ Serial.print(F("ID: "));
   if (status != MFRC522::STATUS_OK) {
     Serial.print(F("Authentication failed: "));
     Serial.println(mfrc522.GetStatusCodeName(status));
+    // If authentication fails reset device
+    curMode = ERROR;
     return;
   }
 
@@ -234,6 +279,8 @@ Serial.print(F("ID: "));
   if (status != MFRC522::STATUS_OK) {
     Serial.print(F("Reading failed: "));
     Serial.println(mfrc522.GetStatusCodeName(status));
+    // If reading fails reset device
+    curMode = ERROR;
     return;
   }
 
@@ -254,12 +301,15 @@ Serial.print(F("ID: "));
   //---------------------------------------- GET LAST NAME
 
   byte buffer2[18];
+  memset(buffer2, 0, sizeof(buffer2));
   block = 1;
 
   status = mfrc522.PCD_Authenticate(MFRC522::PICC_CMD_MF_AUTH_KEY_A, 1, &key, &(mfrc522.uid)); //line 834
   if (status != MFRC522::STATUS_OK) {
     Serial.print(F("Authentication failed: "));
     Serial.println(mfrc522.GetStatusCodeName(status));
+    // If authentication fails reset device
+    curMode = ERROR;
     return;
   }
 
@@ -267,6 +317,8 @@ Serial.print(F("ID: "));
   if (status != MFRC522::STATUS_OK) {
     Serial.print(F("Reading failed: "));
     Serial.println(mfrc522.GetStatusCodeName(status));
+    // If reading fails reset device
+    curMode = ERROR;
     return;
   }
 
@@ -330,7 +382,8 @@ void stuName(byte *buffer, byte bufferSize) {
 
 void sendTask(){
   //String s = String(IDarray);
-  char sendBuffer[100];
+  //memcpy(sendBuffer, NULL, strlen(sendBuffer));
+  memset(sendBuffer, 0, sizeof(sendBuffer));
   *std::remove(IDarray, IDarray+strlen(IDarray), '\n') = '\0';
   *std::remove(Namearray, Namearray+strlen(Namearray), '\n') = '\0';
   strcat(sendBuffer, "Student ID: ");
@@ -341,5 +394,7 @@ void sendTask(){
   Serial.print("Sending attendance record...");
   Serial.println();
   client.publish(TOPIC, sendBuffer);
-  memcpy(sendBuffer, NULL, strlen(sendBuffer));
+  //memset(&sendBuffer[0], 0, sizeof(sendBuffer));
 }
+
+

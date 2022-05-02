@@ -52,6 +52,8 @@ char attBuffer[100];
 char IDarray[18];
 char Namearray[18];
 char sendBuffer[100];
+int prevTime = 0;
+boolean waiting = true;
 
 // Create states of operation
 typedef enum mode{START, RECORD, SEND, ERROR} MODE;
@@ -105,8 +107,23 @@ void setup() {
 
   // Start state in reset state
   curMode = START;
+  prevTime = getTime();
 }
 
+void screen_clear(){
+  oled.setTextSize(2);
+  oled.setCursor(0, 0);
+  oled.clearDisplay();
+  oled.println("Waiting");
+  oled.display();
+}
+
+void check_time(){
+  if(getTime() - prevTime > 10){
+    screen_clear();
+    prevTime = getTime();
+  }
+}
 void setup_wifi() {
   delay(1000);
   //We start by connecting to a WiFi network
@@ -174,6 +191,8 @@ void reconnect() {
 
 void loop() {
   // put your main code here, to run repeatedly:
+  //screen_clear();
+  check_time();
   switch(curMode) {
     case START:
       redOff();
@@ -222,13 +241,19 @@ void lcdTask() {
     greenOn();
     delay(1000);
     greenOff();
-
+    prevTime = getTime();
+    
     for(int i = 0; i < 100; i++){
       oled.print((char)attBuffer[i]);
     }
     oled.display();      // Show initial text
     delay(100);
   }
+}
+
+int getTime(){
+  int time = 0;
+  return time = millis()/1000;
 }
 
 void rfidTask(){
@@ -396,5 +421,3 @@ void sendTask(){
   client.publish(TOPIC, sendBuffer);
   //memset(&sendBuffer[0], 0, sizeof(sendBuffer));
 }
-
-
